@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Builder SaaS - Chatbot Reclutamiento (Local)</title>
+  <style>
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial;margin:0;padding:20px;background:#f5f7fb}
+    .container{max-width:1100px;margin:0 auto;background:#fff;padding:18px;border-radius:10px;box-shadow:0 6px 22px rgba(20,28,70,0.06)}
+    h1{margin:0 0 12px;font-size:20px}
+    .grid{display:grid;grid-template-columns:1fr 420px;gap:18px}
+    .card{background:#fff;padding:12px;border-radius:8px;border:1px solid #eef2f7}
+    label{display:block;margin:8px 0 4px;font-weight:600;font-size:13px}
+    input[type=text],select,textarea{width:100%;padding:8px;border-radius:6px;border:1px solid #dbe4ef}
+    .small{font-size:12px;color:#556}
+    .btn{display:inline-block;padding:8px 12px;border-radius:8px;border:none;cursor:pointer;background:#2563eb;color:#fff}
+    .btn.ghost{background:#eef2ff;color:#2563eb}
+    .list{max-height:350px;overflow:auto}
+    .role-item{padding:10px;border-radius:8px;border:1px dashed #e6eefc;margin-bottom:8px}
+    .flex{display:flex;gap:8px;align-items:center}
+    .tag{background:#eef2ff;border-radius:6px;padding:2px 8px;font-size:12px}
+    .switch{display:inline-flex;align-items:center;gap:8px}
+    .req-row{display:flex;gap:8px;margin-bottom:8px}
+    .req-row input, .req-row select{flex:1}
+    .danger{color:#b91c1c}
+    pre{background:#0b1220;color:#d7eaff;padding:8px;border-radius:6px;overflow:auto}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Builder SaaS — Configuración del Chatbot (local)</h1>
+    <p class="small">Interfaz de administración ligera que guarda todo en <strong>IndexedDB</strong>. Puedes crear ciudades válidas, roles con requisitos (operadores: =, &lt;, &lt;=, &gt;, &gt;=) y elegir qué campos personales pedir al candidato.</p>
+
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h3>1) Ciudades válidas</h3>
+          <label>Agregar ciudad</label>
+          <div class="flex">
+            <input id="cityInput" type="text" placeholder="Ej: Pereira" />
+            <button id="addCityBtn" class="btn">Agregar</button>
+          </div>
+          <p class="small">Ciudades agregadas (el chatbot solo aceptará candidatos de estas ciudades)</p>
+          <div id="citiesList" style="margin-top:8px"></div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <h3>2) Campos personales a capturar</h3>
+          <p class="small">Ciudad y dirección son obligatorios.</p>
+          <div id="personalFields"></div>
+          <div style="margin-top:8px">
+            <button id="savePersonalConfig" class="btn">Guardar configuración</button>
+            <button id="resetPersonalConfig" class="btn ghost">Restablecer por defecto</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <h3>3) Crear Rol</h3>
+          <label>Nombre del rol</label>
+          <input id="roleName" type="text" placeholder="Ej: Auxiliar de Bodega" />
+
+          <label style="margin-top:8px">Requisitos</label>
+          <div id="reqsContainer"></div>
+          <div style="margin-top:8px" class="flex">
+            <button id="addReqBtn" class="btn">Agregar requisito</button>
+            <button id="saveRoleBtn" class="btn ghost">Guardar rol</button>
+          </div>
+          <p class="small" style="margin-top:8px">Cada requisito soporta operador: <code>= &lt; &lt;= &gt; &gt;=</code> y valor en años.</p>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <h3>Export / Import</h3>
+          <div class="actions">
+            <button id="exportBtn" class="btn">Exportar JSON</button>
+            <button id="importBtn" class="btn ghost">Importar JSON</button>
+            <input id="importFile" type="file" accept="application/json" style="display:none" />
+          </div>
+          <p class="small" style="margin-top:8px">Exporta la configuración completa para backup o deploy.</p>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h3>Roles existentes</h3>
+          <div class="list" id="rolesList"></div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <h3>Preview — JSON guardado</h3>
+          <pre id="jsonPreview">Cargando...</pre>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <h3>Guía rápida</h3>
+          <ol class="small">
+            <li>Agregar ciudades válidas.</li>
+            <li>Configurar qué campos personales pedir.</li>
+            <li>Crear roles y requisitos (el operador puede ser =, &lt;, &lt;=, &gt;, &gt;=).</li>
+            <li>Guardar y exportar para usar en tu chatbot.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Simple IndexedDB wrapper
+    const DB_NAME = 'recruitment_builder_db';
+    const DB_VERSION = 1;
+    const STORE_NAME = 'config';
+
+    function openDB(){
+      return new Promise((res,rej)=>{
+        const rq = indexedDB.open(DB_NAME,DB_VERSION);
+        rq.onupgradeneeded = e => {
+          const db = e.target.result;
+          if(!db.objectStoreNames.contains(STORE_NAME)){
+            const store = db.createObjectStore(STORE_NAME, { keyPath: 'key' });
+          }
+        };
+        rq.onsuccess = e => res(e.target.result);
+        rq.onerror = e => rej(e.target.error);
+      });
+    }
+
+    async function dbPut(key, value){
+      const db = await openDB();
+      return new Promise((res,rej)=>{
+        const tx = db.transaction(STORE_NAME,'readwrite');
+        const store = tx.objectStore(STORE_NAME);
+        store.put({key, value});
+        tx.oncomplete = () => res(true);
+        tx.onerror = e => rej(e.target.error);
+      });
+    }
+
+    async function dbGet(key){
+      const db = await openDB();
+      return new Promise((res,rej)=>{
+        const tx = db.transaction(STORE_NAME,'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const rq = store.get(key);
+        rq.onsuccess = e => res(e.target.result ? e.target.result.value : null);
+        rq.onerror = e => rej(e.target.error);
+      });
+    }
+
+    // Default skeleton
+    const DEFAULT = {
+      ciudades_validas: [],
+      datos_personales: {
+        nombre:true, apellido:true, correo_electronico:true,
+        tipo_documento:false, numero_documento:false, genero:false,
+        telefono:true, ciudad_residencia:true, direccion_residencia:true
+      },
+      roles: []
+    };
+
+    // UI refs
+    const cityInput = document.getElementById('cityInput');
+    const addCityBtn = document.getElementById('addCityBtn');
+    const citiesList = document.getElementById('citiesList');
+
+    const personalFields = document.getElementById('personalFields');
+    const savePersonalConfig = document.getElementById('savePersonalConfig');
+    const resetPersonalConfig = document.getElementById('resetPersonalConfig');
+
+    const roleName = document.getElementById('roleName');
+    const reqsContainer = document.getElementById('reqsContainer');
+    const addReqBtn = document.getElementById('addReqBtn');
+    const saveRoleBtn = document.getElementById('saveRoleBtn');
+
+    const rolesList = document.getElementById('rolesList');
+    const jsonPreview = document.getElementById('jsonPreview');
+
+    const exportBtn = document.getElementById('exportBtn');
+    const importBtn = document.getElementById('importBtn');
+    const importFile = document.getElementById('importFile');
+
+    let CONFIG = null;
+
+    // helpers
+    function renderCities(){
+      citiesList.innerHTML = '';
+      CONFIG.ciudades_validas.forEach((c,i)=>{
+        const el = document.createElement('div');
+        el.className = 'flex';
+        el.style.marginBottom='6px';
+        el.innerHTML = `<span class="tag">${escapeHtml(c)}</span> <button data-i="${i}" class="btn ghost">Eliminar</button>`;
+        citiesList.appendChild(el);
+      });
+      // attach delete
+      citiesList.querySelectorAll('button').forEach(b=>{
+        b.onclick = e=>{
+          const i = +e.target.dataset.i;
+          CONFIG.ciudades_validas.splice(i,1);
+          saveConfig();
+          renderAll();
+        }
+      });
+    }
+
+    function renderPersonal(){
+      personalFields.innerHTML = '';
+      const keys = Object.keys(CONFIG.datos_personales);
+      keys.forEach(k=>{
+        const row = document.createElement('div');
+        row.className='flex';
+        row.style.justifyContent='space-between';
+        row.style.alignItems='center';
+        row.style.marginBottom='6px';
+        const label = document.createElement('label');
+        label.style.flex='1';
+        label.innerText = prettifyField(k) + (isMandatory(k) ? ' (obligatorio)' : '');
+        const chk = document.createElement('input');
+        chk.type='checkbox';
+        chk.checked = !!CONFIG.datos_personales[k];
+        chk.disabled = isMandatory(k);
+        chk.onchange = e=>{
+          CONFIG.datos_personales[k] = e.target.checked;
+        }
+        row.appendChild(label);
+        row.appendChild(chk);
+        personalFields.appendChild(row);
+      });
+    }
+
+    function isMandatory(k){
+      return (k==='ciudad_residencia' || k==='direccion_residencia');
+    }
+
+    function prettifyField(k){
+      return k.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase());
+    }
+
+    function renderReqs(){
+      reqsContainer.innerHTML='';
+      const reqs = currentReqs;
+      if(reqs.length===0){
+        reqsContainer.innerHTML = '<p class="small">Sin requisitos</p>';
+        return;
+      }
+      reqs.forEach((r,idx)=>{
+        const div = document.createElement('div');
+        div.className='req-row';
+        div.innerHTML = `
+          <input data-idx="${idx}" data-field="nombre" type="text" placeholder="Ej: Ventas telefónicas" value="${escapeHtml(r.nombre)}" />
+          <select data-idx="${idx}" data-field="operador">
+            <option ${r.operador==='='?'selected':''} value="=">=</option>
+            <option ${r.operador==='<='?'selected':''} value="<=">&lt;=</option>
+            <option ${r.operador=== '>'?'selected':''} value=">">&gt;</option>
+            <option ${r.operador==='>='?'selected':''} value=">=">&gt;=</option>
+            <option ${r.operador==='<'?'selected':''} value="<">&lt;</option>
+          </select>
+          <input data-idx="${idx}" data-field="valor_experiencia" type="number" min="0" step="0.1" placeholder="Años" value="${r.valor_experiencia}" />
+          <button data-i="${idx}" class="btn ghost">Eliminar</button>
+        `;
+        reqsContainer.appendChild(div);
+      });
+      // events
+      reqsContainer.querySelectorAll('input,select').forEach(inp=>{
+        inp.onchange = e=>{
+          const idx = +e.target.dataset.idx;
+          const fld = e.target.dataset.field;
+          let v = e.target.value;
+          if(fld==='valor_experiencia') v = parseFloat(v) || 0;
+          currentReqs[idx][fld] = v;
+        }
+      });
+      reqsContainer.querySelectorAll('button').forEach(b=>{
+        b.onclick = e=>{
+          const idx = +e.target.dataset.i;
+          currentReqs.splice(idx,1);
+          renderReqs();
+        }
+      });
+    }
+
+    function renderRoles(){
+      rolesList.innerHTML='';
+      if(CONFIG.roles.length===0) rolesList.innerHTML='<p class="small">Sin roles</p>';
+      CONFIG.roles.forEach((r,i)=>{
+        const el = document.createElement('div');
+        el.className='role-item';
+        const reqsHtml = r.requisitos.map(rr=>`<div class="small">${escapeHtml(rr.nombre)} <span class="tag">${rr.operador} ${rr.valor_experiencia}</span></div>`).join('');
+        el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:flex-start"><div><strong>${escapeHtml(r.nombre_rol)}</strong><div class="small">${reqsHtml || '<em class="small">Sin requisitos</em>'}</div></div><div><button data-i="${i}" class="btn">Editar</button> <button data-d="${i}" class="btn ghost">Borrar</button></div></div>`;
+        rolesList.appendChild(el);
+      });
+      rolesList.querySelectorAll('button').forEach(b=>{
+        b.onclick = e=>{
+          const i = e.target.dataset.i ? +e.target.dataset.i : null;
+          const d = e.target.dataset.d ? +e.target.dataset.d : null;
+          if(i!==null){ // editar
+            const role = CONFIG.roles[i];
+            roleName.value = role.nombre_rol;
+            currentReqs = JSON.parse(JSON.stringify(role.requisitos || []));
+            editingIndex = i;
+            renderReqs();
+            window.scrollTo({top:0,behavior:'smooth'});
+          }
+          if(d!==null){ // borrar
+            if(confirm('Borrar rol?')){
+              CONFIG.roles.splice(d,1);
+              saveConfig(); renderAll();
+            }
+          }
+        }
+      });
+    }
+
+    function renderPreview(){
+      jsonPreview.innerText = JSON.stringify(CONFIG,null,2);
+    }
+
+    function escapeHtml(s){
+      if(!s) return '';
+      return (''+s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // role building state
+    let currentReqs = [];
+    let editingIndex = -1;
+
+    addCityBtn.onclick = ()=>{
+      const val = cityInput.value.trim();
+      if(!val) return alert('Ingresa una ciudad');
+      if(CONFIG.ciudades_validas.includes(val)) return alert('Ya existe');
+      CONFIG.ciudades_validas.push(val);
+      cityInput.value='';
+      saveConfig(); renderAll();
+    }
+
+    addReqBtn.onclick = ()=>{
+      currentReqs.push({nombre:'', operador:'>=', valor_experiencia:1});
+      renderReqs();
+    }
+
+    saveRoleBtn.onclick = ()=>{
+      const name = roleName.value.trim();
+      if(!name) return alert('Nombre del rol requerido');
+      const roleObj = { nombre_rol:name, requisitos: currentReqs.map(r=>({nombre:r.nombre||'', operador:r.operador, valor_experiencia: Number(r.valor_experiencia) || 0})) };
+      if(editingIndex>=0){
+        CONFIG.roles[editingIndex] = roleObj;
+        editingIndex = -1;
+      } else {
+        CONFIG.roles.push(roleObj);
+      }
+      roleName.value=''; currentReqs = [];
+      saveConfig(); renderAll();
+    }
+
+    savePersonalConfig.onclick = ()=>{
+      // personal checkboxes are already applied on change
+      saveConfig(); renderAll();
+      alert('Configuración personal guardada');
+    }
+    resetPersonalConfig.onclick = ()=>{
+      if(!confirm('Restablecer configuración personal al valor por defecto?')) return;
+      CONFIG.datos_personales = DEFAULT.datos_personales;
+      saveConfig(); renderAll();
+    }
+
+    exportBtn.onclick = async ()=>{
+      const text = JSON.stringify(CONFIG,null,2);
+      const blob = new Blob([text],{type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'recruitment_builder_export.json';
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    }
+    importBtn.onclick = ()=> importFile.click();
+    importFile.onchange = e=>{
+      const f = e.target.files[0];
+      if(!f) return;
+      const r = new FileReader();
+      r.onload = ev=>{
+        try{
+          const data = JSON.parse(ev.target.result);
+          if(!data) throw new Error('JSON inválido');
+          CONFIG = Object.assign({}, DEFAULT, data);
+          saveConfig().then(()=>renderAll());
+        }catch(err){alert('Error importando: '+err.message)}
+      }
+      r.readAsText(f);
+    }
+
+    // persistence
+    async function loadConfig(){
+      const got = await dbGet('app_config');
+      if(!got){ CONFIG = JSON.parse(JSON.stringify(DEFAULT)); await dbPut('app_config', CONFIG); }
+      else CONFIG = got;
+      renderAll();
+    }
+    async function saveConfig(){
+      await dbPut('app_config', CONFIG);
+    }
+
+    function renderAll(){
+      renderCities(); renderPersonal(); renderRoles(); renderReqs(); renderPreview();
+    }
+
+    function prettifyRolesForExport(){
+      return CONFIG.roles.map(r=>({nombre_rol:r.nombre_rol, requisitos:r.requisitos}));
+    }
+
+    // init
+    (async ()=>{
+      await loadConfig();
+    })();
+  </script>
+</body>
+</html>
